@@ -1,22 +1,29 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# runtime-base: system libs only — rebuilt only when system deps change
+# runtime-base: ONLY runtime .so libraries — no headers, no static libs
+#   Kept minimal so the production image inherits nothing extra.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime-base
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libvips42t64 \
+    libjxl0.11 \
+    libwebp7 \
+    libwebpmux3 \
+    libwebpdemux2 \
+    libexif12 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# build-base: adds -dev headers + compiler tools on top of runtime-base.
+#   Nothing from this stage leaks into the production image.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM runtime-base AS build-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-dev \
     libjxl-dev \
     libwebp-dev \
     libexif-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# ─────────────────────────────────────────────────────────────────────────────
-# deps-builder: compiles Python packages (pyvips needs gcc for cffi bindings)
-# This layer is cached as long as pyproject.toml doesn't change.
-# ─────────────────────────────────────────────────────────────────────────────
-FROM runtime-base AS deps-builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
     pkg-config \
@@ -24,39 +31,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+# ─────────────────────────────────────────────────────────────────────────────
+# deps-prod: production venv only (no pytest, no dev tools)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM build-base AS deps-prod
 
 WORKDIR /build
-COPY pyproject.toml ./
-# Install all deps (prod + dev) into /opt/venv — no source code needed yet
-RUN uv sync --no-install-project
+COPY pyproject.toml uv.lock ./
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+RUN uv sync --frozen --no-install-project --no-dev
 
 # ─────────────────────────────────────────────────────────────────────────────
-# dev: for daily development
-#   - pre-built /opt/venv copied from deps-builder (fast, no recompile)
-#   - build tools kept so `uv sync` works when deps change inside the container
-#   - source code is volume-mounted at runtime (never baked in)
-#   - uvicorn runs with --reload for instant hot-reload on file save
-#
-# Usage:
-#   docker compose -f docker-compose.dev.yml up --build   # first time (~2 min)
-#   docker compose -f docker-compose.dev.yml up           # subsequent starts (~5 s)
-#   docker compose -f docker-compose.dev.yml run --rm app uv run pytest tests/ -v
+# deps-dev: all deps including pytest/httpx (for dev & CI)
+# Separate stage so shebang paths are always /opt/venv/bin/*
 # ─────────────────────────────────────────────────────────────────────────────
-FROM runtime-base AS dev
+FROM build-base AS deps-dev
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    python3-dev \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY pyproject.toml uv.lock ./
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-COPY --from=deps-builder /opt/venv /opt/venv
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+RUN uv sync --frozen --no-install-project
 
+# ─────────────────────────────────────────────────────────────────────────────
+# dev: daily development
+#   - pre-built venv copied from deps (fast rebuild on dep change)
+#   - build tools kept so `uv add` / `uv sync` work inside the container
+#   - source code is volume-mounted — never baked in
+# ─────────────────────────────────────────────────────────────────────────────
+FROM build-base AS dev
+
+COPY --from=deps-dev /opt/venv /opt/venv
 WORKDIR /app
-# pyproject.toml is needed by `uv run`; the volume mount will overlay it at
-# runtime, but having it here avoids an error on first `uv run`.
 COPY pyproject.toml ./
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -68,23 +75,41 @@ CMD ["uv", "run", "uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# app (production): no build tools, code baked in
+# test: CI test runner
+#   - runtime-base only (no build tools, no uv binary)
+#   - dev venv baked in (has pytest, httpx, etc.)
+#   - full source including tests baked in
 # ─────────────────────────────────────────────────────────────────────────────
-FROM runtime-base AS app
+FROM runtime-base AS test
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-COPY --from=deps-builder /opt/venv /opt/venv
-
+COPY --from=deps-dev /opt/venv /opt/venv
 WORKDIR /app
 COPY pyproject.toml ./
 COPY app/       ./app/
 COPY tests/     ./tests/
 COPY conftest.py ./
 
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
-    PYTHONPATH=/app \
+ENV PYTHONPATH=/app \
+    VIPS_WARNING=0
+
+CMD ["/opt/venv/bin/pytest", "tests/", "-v"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# app: production
+#   - runtime-base only (no build tools, no uv binary)
+#   - prod venv only (no pytest, no dev tools)
+#   - only app/ source code baked in (no tests)
+#   - CMD uses venv path directly — no uv needed
+# ─────────────────────────────────────────────────────────────────────────────
+FROM runtime-base AS app
+
+COPY --from=deps-prod /opt/venv /opt/venv
+WORKDIR /app
+COPY app/ ./app/
+
+ENV PYTHONPATH=/app \
     VIPS_WARNING=0
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/opt/venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
