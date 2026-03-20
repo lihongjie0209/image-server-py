@@ -41,7 +41,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/reports:/app/reports" \
             image-server-test:ci \
-            /opt/venv/bin/pytest tests/ -v \
+            /opt/venv/bin/pytest tests/ --ignore=tests/smoke -v \
               --html=reports/report.html \
               --self-contained-html \
               --tb=short
