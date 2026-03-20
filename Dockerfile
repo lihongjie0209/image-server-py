@@ -92,7 +92,7 @@ COPY conftest.py ./
 ENV PYTHONPATH=/app \
     VIPS_WARNING=0
 
-CMD ["/opt/venv/bin/pytest", "tests/", "-v"]
+CMD ["/opt/venv/bin/pytest", "tests/", "--ignore=tests/smoke", "-v"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # app: production

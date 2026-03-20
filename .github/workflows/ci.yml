@@ -55,12 +55,87 @@ jobs:
           retention-days: 14
 
   # ────────────────────────────────────────────────────────────────
-  # Job 2: build final image and push to ghcr.io
-  # Runs only on push to main (not on PRs)
+  # Job 2: start the PRODUCTION image, run HTTP smoke tests against it
+  # Proves the app image boots and all runtime libs work end-to-end
+  # ────────────────────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke Test (production image)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.10.0
+
+      - name: Build production image
+        uses: docker/build-push-action@v6.15.0
+        with:
+          context: .
+          target: app
+          load: true
+          tags: image-server-app:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build test runner image
+        uses: docker/build-push-action@v6.15.0
+        with:
+          context: .
+          target: test
+          load: true
+          tags: image-server-test:smoke
+          cache-from: type=gha
+
+      - name: Start production container
+        run: |
+          docker network create smoke-net
+          docker run -d \
+            --name app \
+            --network smoke-net \
+            image-server-app:smoke
+
+      - name: Wait for service to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if docker run --rm --network smoke-net curlimages/curl:latest \
+                -sf http://app:8000/health > /dev/null 2>&1; then
+              echo "✓ Service ready after ${i}s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "✗ Service not ready after 60s"
+          docker logs app
+          exit 1
+
+      - name: Run smoke tests against production container
+        run: |
+          docker run --rm \
+            --network smoke-net \
+            -e SMOKE_URL=http://app:8000 \
+            image-server-test:smoke \
+            /opt/venv/bin/pytest tests/smoke/ -v --tb=short
+
+      - name: Dump production container logs on failure
+        if: failure()
+        run: docker logs app
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker stop app  || true
+          docker rm   app  || true
+          docker network rm smoke-net || true
+
+  # ────────────────────────────────────────────────────────────────
+  # Job 3: build final image and push to ghcr.io
+  # Runs only on push to main, after BOTH test jobs pass
   # ────────────────────────────────────────────────────────────────
   build-and-push:
     name: Build & Push to GHCR
-    needs: test
+    needs: [test, smoke-test]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
