@@ -68,11 +68,13 @@ COPY pyproject.toml ./
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     PYTHONPATH=/app \
-    VIPS_WARNING=0
+    VIPS_WARNING=0 \
+    ROOT_PATH=""
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+CMD exec uv run uvicorn app.main:app \
+      --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app \
+      ${ROOT_PATH:+--root-path "$ROOT_PATH"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # test: CI test runner
@@ -108,8 +110,12 @@ WORKDIR /app
 COPY app/ ./app/
 
 ENV PYTHONPATH=/app \
-    VIPS_WARNING=0
+    VIPS_WARNING=0 \
+    ROOT_PATH=""
 
 EXPOSE 8000
-CMD ["/opt/venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so ${ROOT_PATH:+--root-path $ROOT_PATH} expands at runtime.
+CMD exec /opt/venv/bin/uvicorn app.main:app \
+      --host 0.0.0.0 --port 8000 \
+      ${ROOT_PATH:+--root-path "$ROOT_PATH"}
 

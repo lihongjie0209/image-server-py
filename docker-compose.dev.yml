@@ -28,8 +28,12 @@ services:
       UV_PROJECT_ENVIRONMENT: /opt/venv
       PYTHONPATH: /app
       VIPS_WARNING: "0"
+      # Set a path prefix when deploying behind a reverse proxy at a sub-directory.
+      # Example: ROOT_PATH=/image-server
+      ROOT_PATH: ""
     # uvicorn watches all Python files under /app and reloads on change
     command: >
-      uv run uvicorn app.main:app
-      --host 0.0.0.0 --port 8000
-      --reload --reload-dir /app/app
+      sh -c "uv run uvicorn app.main:app
+        --host 0.0.0.0 --port 8000
+        --reload --reload-dir /app/app
+        $${ROOT_PATH:+--root-path $$ROOT_PATH}"

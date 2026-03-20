@@ -30,6 +30,11 @@ _log = get_logger("image_service")
 
 _START_TIME = time.time()
 
+# Optional path prefix for reverse-proxy deployments (e.g. ROOT_PATH=/image-server).
+# Affects OpenAPI docs URLs and redirect generation. Pass the same value to
+# uvicorn via --root-path for full ASGI scope support (handled in Dockerfile CMD).
+_ROOT_PATH = os.environ.get("ROOT_PATH", "")
+
 # ── app ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -44,6 +49,7 @@ app = FastAPI(
         "`X-Timing` response header (JSON)."
     ),
     license_info={"name": "MIT"},
+    root_path=_ROOT_PATH,
 )
 
 # Order matters: CORS first so preflight replies don't bypass audit
