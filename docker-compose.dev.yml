@@ -1,0 +1,35 @@
+# Development compose — code is mounted, server hot-reloads on file changes.
+#
+# First run (builds the image + installs Python deps):
+#   docker compose -f docker-compose.dev.yml up --build
+#
+# Subsequent runs (instant, no rebuild needed):
+#   docker compose -f docker-compose.dev.yml up
+#
+# Run tests:
+#   docker compose -f docker-compose.dev.yml run --rm app \
+#     uv run pytest tests/ -v --tb=short \
+#     --html=/app/reports/report.html --self-contained-html
+#
+# Open a shell:
+#   docker compose -f docker-compose.dev.yml run --rm app bash
+
+services:
+  app:
+    build:
+      context: .
+      target: dev          # only builds runtime-base + dev layers (~60 s first time)
+    volumes:
+      - .:/app             # live-mount source — edits are instant
+      # /opt/venv lives inside the container; NOT overwritten by the mount above
+    ports:
+      - "8000:8000"
+    environment:
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      PYTHONPATH: /app
+      VIPS_WARNING: "0"
+    # uvicorn watches all Python files under /app and reloads on change
+    command: >
+      uv run uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --reload --reload-dir /app/app

@@ -1,0 +1,35 @@
+{
+  "name": "Image Server (Dev)",
+
+  // Reuse the dev compose service — no separate image to maintain
+  "dockerComposeFile": ["../docker-compose.dev.yml"],
+  "service": "app",
+  "workspaceFolder": "/app",
+  "shutdownAction": "stopCompose",
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "python.terminal.activateEnvironment": false,
+        "[python]": {
+          "editor.formatOnSave": true
+        }
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-python.debugpy"
+      ]
+    }
+  },
+
+  // Sync deps if pyproject.toml changed while container was stopped
+  "postStartCommand": "uv sync",
+
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "HTTP API", "onAutoForward": "notify" }
+  }
+}
